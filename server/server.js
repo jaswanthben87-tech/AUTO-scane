@@ -317,6 +317,17 @@ app.post("/api/autoscan", async (req, res) => {
   }
 });
 
+app.use((err, _req, res, _next) => {
+  if (err?.type === "entity.too.large" || err?.status === 413) {
+    return res.status(413).json({ error: "Screenshot payload is too large. Zoom out or reduce the browser window size, then retry." });
+  }
+  if (err instanceof SyntaxError && err?.status === 400) {
+    return res.status(400).json({ error: "Invalid JSON request body." });
+  }
+  console.error("Unhandled server error:", err?.message || err);
+  return res.status(500).json({ error: "Unexpected server error." });
+});
+
 if (!isVercel) {
   app.listen(port, "127.0.0.1", () => {
     console.log(`Ask Gemini local server listening at http://127.0.0.1:${port}`);

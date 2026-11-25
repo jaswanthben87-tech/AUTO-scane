@@ -40,8 +40,23 @@ async function getServerUrl() {
 
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 8000) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
-  const data = await response.json().catch(() => ({ error: "Backend returned an unreadable response." }));
-  if (!response.ok) throw new Error(data.error || `Backend request failed (${response.status}).`);
+  const raw = await response.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    data = null;
+  }
+  if (!response.ok) {
+    if (data?.error) throw new Error(data.error);
+    if (response.status === 413) throw new Error("Screenshot is too large for the backend (HTTP 413). Zoom out or resize the window and retry.");
+    if (response.status === 504) throw new Error("Backend request timed out (HTTP 504). Press Retry in a moment.");
+    const snippet = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+    throw new Error(snippet ? `Backend error (${response.status}): ${snippet}` : `Backend request failed (${response.status}).`);
+  }
+  if (!data || typeof data !== "object") {
+    throw new Error("Backend returned an unreadable response.");
+  }
   return data;
 }
 
@@ -71,8 +86,8 @@ async function startScan() {
     if (runningTabs.has(tab.id)) return;
     runningTabs.add(tab.id);
 
-    // Capture first while the target tab is still active; never send this image to Gemini.
-    const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    // Capture as JPEG to keep payload well below Vercel's 4.5 MB serverless limit; never send to Gemini locally.
+    const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 82 });
     try {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
     } catch (e) {
@@ -104,7 +119,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const tab = sender.tab;
         if (!tab?.id || !tab.windowId) throw new Error("The active tab is unavailable. Press Alt+X again.");
-        const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+        const screenshot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 82 });
         sendResponse({ screenshot });
       } catch (e) { sendResponse({ error: e?.message || "Screenshot capture failed." }); }
     })();
